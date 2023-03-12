@@ -8,14 +8,14 @@ pub struct Error(String);
 /// The value of the hash is updated in place.
 macro_rules! h {
     ($ancestor: expr $(, $bit: expr)?) => {{
-        let mut ancestor = $ancestor;
         let mut hasher = Sha3::v256();
-        hasher.update(&ancestor);
+        hasher.update(&$ancestor);
         $(
             hasher.update(&[$bit as u8]);
         )?
-        hasher.finalize(&mut ancestor);
-        ancestor
+        let mut output = [0; 32];
+        hasher.finalize(&mut output);
+        output
     }};
 }
 
