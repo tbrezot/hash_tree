@@ -7,7 +7,7 @@ pub struct Error(String);
 ///
 /// The value of the hash is updated in place.
 macro_rules! h {
-    ($ancestor: expr, $($bit: expr)?) => {{
+    ($ancestor: expr $(, $bit: expr)?) => {{
         let mut ancestor = $ancestor;
         let mut hasher = Sha3::v256();
         hasher.update(&ancestor);
@@ -126,7 +126,7 @@ pub fn compute_ancestor(
         ));
     }
     let degree = find_kinship_degree(start, stop);
-    let ancestor = recursive_hash(seed, depth - degree, start >> degree, stop >> degree)?;
+    let ancestor = recursive_hash(h!(seed), depth - degree, start >> degree, stop >> degree)?;
     if ancestor.len() != 1 {
         return Err(Error(format!(
             "wrong number of ancestors found: {}, should be 1",
