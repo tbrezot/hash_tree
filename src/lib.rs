@@ -1,23 +1,26 @@
-#![allow(dead_code)]
-
 use tiny_keccak::{Hasher, Sha3};
 
 #[derive(Debug)]
 pub struct Error(String);
 
-/// Hash the given value using Sha3-256.
+/// Hash the given values using Sha3-256.
 ///
 /// The value of the hash is updated in place.
-fn h(mut ancestor: [u8; 32], flag: u32) -> [u8; 32] {
-    let mut hasher = Sha3::v256();
-    hasher.update(&ancestor);
-    hasher.update(&[flag as u8]);
-    hasher.finalize(&mut ancestor);
-    ancestor
+macro_rules! h {
+    ($ancestor: expr, $($bit: expr)?) => {{
+        let mut ancestor = $ancestor;
+        let mut hasher = Sha3::v256();
+        hasher.update(&ancestor);
+        $(
+            hasher.update(&[$bit as u8]);
+        )?
+        hasher.finalize(&mut ancestor);
+        ancestor
+    }};
 }
 
 /// Finds the degree of the closest ancestor of the given two integers.
-pub fn find_kinship_degree(n1: u32, n2: u32) -> u8 {
+fn find_kinship_degree(n1: u32, n2: u32) -> u8 {
     let mut ancestor = 0;
     let mut diff = n1 ^ n2;
     while diff != 0 {
@@ -28,6 +31,15 @@ pub fn find_kinship_degree(n1: u32, n2: u32) -> u8 {
 }
 
 /// Computes the list of children hashes.
+///
+/// This is an adaptation of a simple recursive tree walking algorithm.
+///
+/// # Parameters
+///
+/// - `ancestor`    : value of the direct ancestor
+/// - `depth`       : current depth (0 is the leaf level)
+/// - `start`       : leftmost branch to explore
+/// - `stop`        : rightmost branch to explore
 fn recursive_hash(
     ancestor: [u8; 32],
     depth: u8,
@@ -35,11 +47,11 @@ fn recursive_hash(
     stop: u32,
 ) -> Result<Vec<[u8; 32]>, Error> {
     let children = if (start >> depth) % 2 == (stop >> depth) % 2 {
-        vec![h(ancestor, (start >> depth) % 2)]
+        vec![h!(ancestor, (start >> depth) % 2)]
     } else if (start >> depth) % 2 < (stop >> depth) % 2 {
         vec![
-            h(ancestor, (start >> depth) % 2),
-            h(ancestor, (stop >> depth) % 2),
+            h!(ancestor, (start >> depth) % 2),
+            h!(ancestor, (stop >> depth) % 2),
         ]
     } else {
         return Err(Error(format!(
@@ -54,9 +66,12 @@ fn recursive_hash(
             // Branch does *not* fork.
             recursive_hash(children[0], depth - 1, start, stop)
         } else {
-            // Branch forks.
             Ok([
+                // Walk through the left branch.
+                // Do not limit the exploration of the rightmost branch.
                 recursive_hash(children[0], depth - 1, start, u32::MAX)?,
+                // Walk through the right branch.
+                // Do not limit the exploration of the leftmost branch.
                 recursive_hash(children[1], depth - 1, 0, stop)?,
             ]
             .concat())
@@ -64,10 +79,44 @@ fn recursive_hash(
     }
 }
 
-/// Computes the first ancestor hash.
-fn compute_ancestor(
+/// Computes the first common ancestor hash of the `start`th and `stop`th hashes.
+///
+/// # Description
+///
+/// The first common ancestor is defined as being the last hash that allows to generate all hashes
+/// between `start` and `stop`.
+///
+/// ```txt
+///
+///         H(seed)
+///            |
+///      -------------
+///      0           1
+///      |           |
+///   -------     -------
+///   0     1     0     1
+///   |     |     |     |
+/// ----  ----  ----  ----
+/// 0  1  0  1  0  1  0  1
+/// |  |  |  |  |  |  |  |
+/// 0  1  2  3  4  5  6  7  <-- indice of the hash in the tree order
+///
+/// ```
+///
+/// In this example:
+/// - the first common ancestor of 6 and 7 is `H(H(H(seed) || 1) || 1)`
+/// - the first common ancestor of 0 and 3 is `H(H(seed) || 0)`
+/// - the first common ancestor of 3 and 4 is `H(seed)`
+///
+/// # Parameters
+///
+/// - `seed`    : secret seed used to generate the first hash of the chain
+/// - `depth`   : depth of the tree to use
+/// - `start`   : indice of the first hash to generate
+/// - `stop`    : indice of the last hash to generate
+pub fn compute_ancestor(
     seed: [u8; 32],
-    graph_depth: u8,
+    depth: u8,
     start: u32,
     stop: u32,
 ) -> Result<[u8; 32], Error> {
@@ -77,7 +126,7 @@ fn compute_ancestor(
         ));
     }
     let degree = find_kinship_degree(start, stop);
-    let ancestor = recursive_hash(seed, graph_depth - degree, start >> degree, stop >> degree)?;
+    let ancestor = recursive_hash(seed, depth - degree, start >> degree, stop >> degree)?;
     if ancestor.len() != 1 {
         return Err(Error(format!(
             "wrong number of ancestors found: {}, should be 1",
@@ -87,7 +136,42 @@ fn compute_ancestor(
     Ok(ancestor[0])
 }
 
-fn compute_children_hashes(
+/// Computes all the hashes between the `start`th and `stop`th given the value of their first
+/// common ancestor.
+///
+/// # Description
+///
+/// ```txt
+///
+///         H(seed)
+///            |
+///      -------------
+///      0           1
+///      |           |
+///   -------     -------
+///   0     1     0     1
+///   |     |     |     |
+/// ----  ----  ----  ----
+/// 0  1  0  1  0  1  0  1
+/// |  |  |  |  |  |  |  |
+/// 0  1  2  3  4  5  6  7  <-- indice of the hash in the tree order
+///
+/// ```
+///
+/// In this example:
+/// - generating hashes between 0 and 1 would produce:
+///     + H(ancestor || 0)
+///     + H(ancestor || 1)
+/// - generating hashes between 3 and 4 would produce:
+///     + H(H(H(ancestor || 0) || 1) || 1)
+///     + H(H(H(ancestor || 1) || 0) || 0)
+///
+/// # Parameters
+///
+/// - `ancestor`    : value of the first common ancestor
+/// - `start`       : indice of the first hash to generate
+/// - `stop`        : indice of the last hash to generate
+pub fn compute_children_hashes(
     ancestor: [u8; 32],
     start: u32,
     stop: u32,
@@ -133,10 +217,10 @@ mod tests {
 
         // Check some hash values.
         let expected_children = [
-            h(h([0; 32], 0), 0),
-            h(h([0; 32], 0), 1),
-            h(h([0; 32], 1), 0),
-            h(h([0; 32], 1), 1),
+            h!(h!([0; 32], 0), 0),
+            h!(h!([0; 32], 0), 1),
+            h!(h!([0; 32], 1), 0),
+            h!(h!([0; 32], 1), 1),
         ];
         let degree = find_kinship_degree(0, 3);
         let children = recursive_hash([0; 32], degree - 1, 0, 3).unwrap();
