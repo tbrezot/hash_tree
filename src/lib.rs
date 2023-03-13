@@ -20,14 +20,20 @@ macro_rules! h {
 }
 
 /// Finds the degree of the closest ancestor of the given two integers.
+///
+/// # Complexity
+///
+/// All operations are additions or but shifting.
+/// This algorithm runs in `O(ln max(n1, n2))`.
 fn find_kinship_degree(n1: u32, n2: u32) -> u8 {
-    let mut ancestor = 0;
+    // Only bits that differ matter.
     let mut diff = n1 ^ n2;
+    let mut degree = 0;
     while diff != 0 {
-        ancestor += 1;
+        degree += 1;
         diff >>= 1;
     }
-    ancestor
+    degree
 }
 
 /// Computes the list of children hashes.
