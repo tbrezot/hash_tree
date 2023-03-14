@@ -36,6 +36,57 @@ fn find_kinship_degree(n1: u32, n2: u32) -> u8 {
     degree
 }
 
+fn is_brother(n1: u32, n2: u32) -> bool {
+    ((n1 ^ n2) >> 1) & 1 == 0
+}
+
+#[allow(dead_code)]
+fn list_direct_ancestors(candidates: Vec<u32>) -> Result<Vec<Vec<u32>>, Error> {
+    // Sort the candidates into two groups:
+    // - when two candidates are brothers, add the parent;
+    // - when a candidate has no brother, add it to the lonely children list.
+    //
+    // Ensure enough space is allocated to avoid reallocations.
+    let mut parents = Vec::with_capacity(candidates.len() / 2);
+    let mut lone_children = Vec::with_capacity(candidates.len() / 2);
+
+    let mut pos = 0;
+    let mut is_brother_found = false;
+    while pos < (candidates.len() - 1) {
+        if candidates[pos] >= candidates[pos + 1] {
+            return Err(Error(
+                "strict order must be maintained in the candidate list".to_string(),
+            ));
+        }
+
+        if is_brother_found {
+            // The brother has been found and the parent added.
+            // A node cannot have more than one brother.
+            is_brother_found = false;
+        } else if is_brother(candidates[pos], candidates[pos + 1]) {
+            is_brother_found = true;
+            parents.push(candidates[pos] >> 1);
+        } else {
+            lone_children.push(candidates[pos]);
+        }
+        pos += 1;
+    }
+
+    // Deal with the last candidate.
+    if candidates.len() == 1 || !is_brother_found {
+        lone_children.push(candidates[candidates.len() - 1])
+    }
+
+    // Resize vector to avoid wasted space. This implies reallocating.
+    lone_children.shrink_to_fit();
+    let mut res = vec![lone_children];
+    if !parents.is_empty() {
+        res.append(&mut list_direct_ancestors(parents)?);
+    }
+
+    Ok(res)
+}
+
 /// Computes the list of children hashes.
 ///
 /// This is an adaptation of a simple recursive tree walking algorithm.
@@ -52,13 +103,10 @@ fn recursive_hash(
     start: u32,
     stop: u32,
 ) -> Result<Vec<[u8; 32]>, Error> {
-    let children = if (start >> depth) % 2 == (stop >> depth) % 2 {
-        vec![h!(ancestor, (start >> depth) % 2)]
-    } else if (start >> depth) % 2 < (stop >> depth) % 2 {
-        vec![
-            h!(ancestor, (start >> depth) % 2),
-            h!(ancestor, (stop >> depth) % 2),
-        ]
+    let children = if ((start ^ stop) >> depth) & 1 == 0 {
+        vec![h!(ancestor, (start >> depth) & 1)]
+    } else if (start >> depth) & 1 == 0 {
+        vec![h!(ancestor, 0), h!(ancestor, 1)]
     } else {
         return Err(Error(format!(
             "start value's ({start}) {depth}th bit is greater than the stop value's ({stop}) one"
@@ -234,5 +282,14 @@ mod tests {
         for (expected_child, child) in expected_children.iter().zip(children.iter()) {
             assert_eq!(expected_child, child);
         }
+    }
+
+    #[test]
+    fn test_list_smallest_ancestors() {
+        let (n1, n2) = (1, 4);
+        let smallest_ancestors = list_direct_ancestors((n1..=n2).collect()).unwrap();
+        println!("smallest ancestors of {n1}..{n2}:");
+        println!("{smallest_ancestors:?}");
+        panic!("I want to see my print");
     }
 }
